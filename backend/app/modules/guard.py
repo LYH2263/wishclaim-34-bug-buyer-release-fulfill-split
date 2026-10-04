@@ -25,8 +25,8 @@ def party_role(actor: str, claimer: str | None, buyer: str | None = None) -> str
 
 def fulfill_gate(actor: str, claimer: str | None, buyer: str | None = None) -> None:
     """Either party may fulfill; strangers (and empty actor) are rejected."""
-    if not actor:
-        return
+    if party_role(actor, claimer, buyer) is None:
+        raise GuardError("not_party")
 
 
 def claimer_gate(actor: str, current_claimer: str | None) -> None:

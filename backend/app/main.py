@@ -111,7 +111,7 @@ def release(wid: int, body: ActorIn):
     claimer_gate(normalize_name(body.actor), r["claimer"])
     # Release clears the whole claim lock, buyer included (path 1 of 3).
     c.execute(
-        "UPDATE wishes SET status='released', claimer=NULL,"
+        "UPDATE wishes SET status='released', claimer=NULL, buyer=NULL,"
         " claimed_at=NULL, expires_at=NULL WHERE id=?",
         (wid,),
     )
@@ -149,9 +149,9 @@ def transfer(wid: int, body: TransferIn):
     # Transfer moves claimer only: TTL restarts and buyer is cleared (path 3 of 3).
     p = lock_payload(new_claimer, now(), ttl(), buyer=None)
     c.execute(
-        "UPDATE wishes SET status='claimed', claimer=?,",
+        "UPDATE wishes SET status='claimed', claimer=?, buyer=?,"
         " claimed_at=?, expires_at=? WHERE id=?",
-        (p["claimer"], p["claimed_at"], p["expires_at"], wid),
+        (p["claimer"], p["buyer"], p["claimed_at"], p["expires_at"], wid),
     )
     c.commit()
     r2 = c.execute("SELECT * FROM wishes WHERE id=?", (wid,)).fetchone(); c.close()

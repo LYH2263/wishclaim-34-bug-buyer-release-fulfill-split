@@ -9,6 +9,10 @@ WISH_COLUMNS = (
     "claimed_at", "expires_at", "data_quality",
 )
 
+# Only these statuses carry a live (claimed) or pinned (fulfilled) party pair.
+# Anything else projects no names, even if stale columns linger in the DB.
+PARTY_STATUSES = ("claimed", "fulfilled")
+
 
 def parties_view(claimer: str | None, buyer: str | None) -> dict:
     return {"claimer": claimer, "buyer": buyer, "dual": bool(buyer)}
@@ -21,9 +25,10 @@ def project_wish(row) -> dict:
             d[k] = row[k]
         except (KeyError, IndexError):
             d[k] = None
-    d["parties"] = parties_view(d["claimer"], d["buyer"] if d.get("status") != "released" else d["buyer"])
-    if d.get("status") == "released":
-        pass
+    if d.get("status") not in PARTY_STATUSES:
+        d["claimer"] = None
+        d["buyer"] = None
+    d["parties"] = parties_view(d["claimer"], d["buyer"])
     return d
 
 

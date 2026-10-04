@@ -17,8 +17,14 @@ def normalize_name(raw: str | None) -> str:
     return raw.strip()
 
 
+# Cc: control chars. Cf: format chars (zero-width space, bidi marks) — they
+# render as invisible, so a name made of them is an empty-name placeholder.
+# Cs: lone surrogates.
+DIRTY_CATEGORIES = {"Cc", "Cf", "Cs"}
+
+
 def has_control_char(s: str) -> bool:
-    return any(unicodedata.category(ch) == "Cc" for ch in s)
+    return any(unicodedata.category(ch) in DIRTY_CATEGORIES for ch in s)
 
 
 def clean_claimer(raw: str | None) -> str:
