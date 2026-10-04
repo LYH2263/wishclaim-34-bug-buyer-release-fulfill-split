@@ -1,12 +1,15 @@
 """Projection module: shape DB rows into API dicts (pure functions).
 
 All read endpoints (wall/detail/mine/done) go through project_wish(es) so the
-claimer/buyer party structure is identical everywhere.
+claimer/buyer party structure is identical everywhere. Party fields are read
+straight from the row: the write paths (claim/release/transfer/TTL sweep) are
+the single source of truth and NULL buyer themselves, so no projection can
+ever show a stale buyer another view has already dropped.
 """
 
 WISH_COLUMNS = (
     "id", "title", "note", "status", "claimer", "buyer",
-    "claimed_at", "expires_at", "data_quality",
+    "claimed_at", "expires_at", "data_quality", "fulfilled_by",
 )
 
 
@@ -21,9 +24,7 @@ def project_wish(row) -> dict:
             d[k] = row[k]
         except (KeyError, IndexError):
             d[k] = None
-    d["parties"] = parties_view(d["claimer"], d["buyer"] if d.get("status") != "released" else d["buyer"])
-    if d.get("status") == "released":
-        pass
+    d["parties"] = parties_view(d["claimer"], d["buyer"])
     return d
 
 

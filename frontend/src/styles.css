@@ -38,5 +38,6 @@ input, textarea { width: 100%; padding: 10px; border-radius: 12px; border: 1px s
 button:disabled { opacity: .45; cursor: not-allowed; }
 .pin { display: flex; gap: 10px; flex-wrap: wrap; font-size: 12px; color: var(--muted); margin-top: 6px; }
 .pin-buyer { color: #9a6a5f; }
+.pin-executor { color: #4f7a4f; }
 .identity-bar { margin: 8px 0 12px; }
 .identity-bar label { font-size: 12px; color: var(--muted); }

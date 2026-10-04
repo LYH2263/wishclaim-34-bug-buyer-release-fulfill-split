@@ -8,6 +8,9 @@ def _ensure_columns(c):
     cols = {r["name"] for r in c.execute("PRAGMA table_info(wishes)")}
     if "buyer" not in cols:
         c.execute("ALTER TABLE wishes ADD COLUMN buyer TEXT")
+    if "fulfilled_by" not in cols:
+        # Pinned at fulfill time: the party (claimer or buyer) who acted.
+        c.execute("ALTER TABLE wishes ADD COLUMN fulfilled_by TEXT")
 
 
 def init_db():
@@ -15,7 +18,8 @@ def init_db():
     c.executescript("""
     CREATE TABLE IF NOT EXISTS wishes(
       id INTEGER PRIMARY KEY AUTOINCREMENT, title TEXT, note TEXT, status TEXT,
-      claimer TEXT, buyer TEXT, claimed_at TEXT, expires_at TEXT, data_quality TEXT
+      claimer TEXT, buyer TEXT, claimed_at TEXT, expires_at TEXT,
+      data_quality TEXT, fulfilled_by TEXT
     );
     CREATE TABLE IF NOT EXISTS settings(key TEXT PRIMARY KEY, value TEXT);
     """)

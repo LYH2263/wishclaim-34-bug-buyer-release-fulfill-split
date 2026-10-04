@@ -103,35 +103,49 @@ class ActorIn(BaseModel):
 
 @app.post("/api/wishes/{wid}/release")
 def release(wid: int, body: ActorIn):
-    c = connect()
-    r = c.execute("SELECT * FROM wishes WHERE id=?", (wid,)).fetchone()
-    if not r: c.close(); raise HTTPException(404, "not found")
-    if r["status"] != "claimed":
-        c.close(); raise HTTPException(400, "not_claimed")
-    claimer_gate(normalize_name(body.actor), r["claimer"])
-    # Release clears the whole claim lock, buyer included (path 1 of 3).
-    c.execute(
-        "UPDATE wishes SET status='released', claimer=NULL,"
-        " claimed_at=NULL, expires_at=NULL WHERE id=?",
-        (wid,),
-    )
-    c.commit()
-    r2 = c.execute("SELECT * FROM wishes WHERE id=?", (wid,)).fetchone(); c.close()
-    return project_wish(r2)
+    c = connect(immediate=True)
+    try:
+        r = c.execute("SELECT * FROM wishes WHERE id=?", (wid,)).fetchone()
+        if not r: raise HTTPException(404, "not found")
+        if r["status"] != "claimed":
+            raise HTTPException(400, "not_claimed")
+        claimer_gate(normalize_name(body.actor), r["claimer"])
+        # Release clears the whole claim lock, buyer included (path 1 of 3):
+        # claimer and buyer are NULLed in the same UPDATE so every projection
+        # (wall/detail/mine) loses the old buyer at once.
+        c.execute(
+            "UPDATE wishes SET status='released', claimer=NULL, buyer=NULL,"
+            " claimed_at=NULL, expires_at=NULL WHERE id=?",
+            (wid,),
+        )
+        c.commit()
+        r2 = c.execute("SELECT * FROM wishes WHERE id=?", (wid,)).fetchone()
+        return project_wish(r2)
+    finally:
+        c.close()
 
 @app.post("/api/wishes/{wid}/fulfill")
 def fulfill(wid: int, body: ActorIn):
-    c = connect()
-    r = c.execute("SELECT * FROM wishes WHERE id=?", (wid,)).fetchone()
-    if not r: c.close(); raise HTTPException(404, "not found")
-    if r["status"] != "claimed":
-        c.close(); raise HTTPException(400, "need_claim")
-    fulfill_gate(normalize_name(body.actor), r["claimer"], r["buyer"])
-    # Status-only update: claimer/buyer columns stay pinned as the done snapshot.
-    c.execute("UPDATE wishes SET status='fulfilled' WHERE id=?", (wid,))
-    c.commit()
-    r2 = c.execute("SELECT * FROM wishes WHERE id=?", (wid,)).fetchone(); c.close()
-    return project_wish(r2)
+    c = connect(immediate=True)
+    try:
+        r = c.execute("SELECT * FROM wishes WHERE id=?", (wid,)).fetchone()
+        if not r: raise HTTPException(404, "not found")
+        if r["status"] != "claimed":
+            raise HTTPException(400, "need_claim")
+        actor = normalize_name(body.actor)
+        # Gate doubles as identity resolution: it raises not_party for outsiders
+        # and returns the matched role. The actor is then pinned as the executor
+        # in the same status flip, so done/wall/detail always name a party.
+        fulfill_gate(actor, r["claimer"], r["buyer"])
+        c.execute(
+            "UPDATE wishes SET status='fulfilled', fulfilled_by=? WHERE id=?",
+            (actor, wid),
+        )
+        c.commit()
+        r2 = c.execute("SELECT * FROM wishes WHERE id=?", (wid,)).fetchone()
+        return project_wish(r2)
+    finally:
+        c.close()
 
 class TransferIn(BaseModel):
     actor: str = ""
@@ -139,23 +153,30 @@ class TransferIn(BaseModel):
 
 @app.post("/api/wishes/{wid}/transfer")
 def transfer(wid: int, body: TransferIn):
-    c = connect()
-    r = c.execute("SELECT * FROM wishes WHERE id=?", (wid,)).fetchone()
-    if not r: c.close(); raise HTTPException(404, "not found")
-    if r["status"] != "claimed":
-        c.close(); raise HTTPException(400, "not_claimed")
-    claimer_gate(normalize_name(body.actor), r["claimer"])
-    new_claimer = clean_new_claimer(body.new_claimer, r["claimer"])
-    # Transfer moves claimer only: TTL restarts and buyer is cleared (path 3 of 3).
-    p = lock_payload(new_claimer, now(), ttl(), buyer=None)
-    c.execute(
-        "UPDATE wishes SET status='claimed', claimer=?,",
-        " claimed_at=?, expires_at=? WHERE id=?",
-        (p["claimer"], p["claimed_at"], p["expires_at"], wid),
-    )
-    c.commit()
-    r2 = c.execute("SELECT * FROM wishes WHERE id=?", (wid,)).fetchone(); c.close()
-    return project_wish(r2)
+    c = connect(immediate=True)
+    try:
+        r = c.execute("SELECT * FROM wishes WHERE id=?", (wid,)).fetchone()
+        if not r: raise HTTPException(404, "not found")
+        if r["status"] != "claimed":
+            raise HTTPException(400, "not_claimed")
+        # Validate BEFORE touching the row: on failure neither the new claimer
+        # nor the old buyer gains/loses anything — the single binding is intact.
+        claimer_gate(normalize_name(body.actor), r["claimer"])
+        new_claimer = clean_new_claimer(body.new_claimer, r["claimer"])
+        # Transfer moves claimer only: TTL restarts and the old buyer is
+        # cleared in the SAME atomic UPDATE (path 3 of 3) — there is no
+        # instant where the new claimer and old buyer both hold fulfill rights.
+        p = lock_payload(new_claimer, now(), ttl(), buyer=None)
+        c.execute(
+            "UPDATE wishes SET status='claimed', claimer=?, buyer=NULL,"
+            " claimed_at=?, expires_at=? WHERE id=?",
+            (p["claimer"], p["claimed_at"], p["expires_at"], wid),
+        )
+        c.commit()
+        r2 = c.execute("SELECT * FROM wishes WHERE id=?", (wid,)).fetchone()
+        return project_wish(r2)
+    finally:
+        c.close()
 
 @app.get("/api/mine")
 def mine(actor: str | None = None, claimer: str | None = None):
@@ -167,9 +188,10 @@ def mine(actor: str | None = None, claimer: str | None = None):
     if name == "":
         raise HTTPException(400, "claimer_empty")
     c = connect(); sweep(c); c.commit()
+    # Includes orders I act on as the bound buyer, as the page copy promises.
     rows = list(c.execute(
-        "SELECT * FROM wishes WHERE claimer=? ORDER BY id DESC",
-        (name,),
+        "SELECT * FROM wishes WHERE claimer=? OR buyer=? ORDER BY id DESC",
+        (name, name),
     )); c.close()
     return project_wishes(rows)
 

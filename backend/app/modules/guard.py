@@ -23,10 +23,17 @@ def party_role(actor: str, claimer: str | None, buyer: str | None = None) -> str
     return None
 
 
-def fulfill_gate(actor: str, claimer: str | None, buyer: str | None = None) -> None:
-    """Either party may fulfill; strangers (and empty actor) are rejected."""
-    if not actor:
-        return
+def fulfill_gate(actor: str, claimer: str | None, buyer: str | None = None) -> str:
+    """Only the claimer or the bound buyer may fulfill.
+
+    Returns the actor's role ('claimer' / 'buyer'); raises not_party for
+    strangers and empty actors. Callers pin the returned actor name as the
+    executor (fulfilled_by) so an outsider can never end up on the done page.
+    """
+    role = party_role(actor, claimer, buyer)
+    if role is None:
+        raise GuardError("not_party")
+    return role
 
 
 def claimer_gate(actor: str, current_claimer: str | None) -> None:
